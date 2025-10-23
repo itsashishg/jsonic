@@ -1,18 +1,81 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import VueJsonPretty from 'vue-json-pretty'
 import 'vue-json-pretty/lib/styles.css'
 
 const jsonInput = ref('')
-
+const lineNumbers = ref('1')
+const textareaRef = ref<HTMLTextAreaElement | null>(null)
+const lineNumbersRef = ref<HTMLDivElement | null>(null)
 const jsonViewer = ref()
-const isCollapsed = ref(true)
+const highlightRef = ref<HTMLElement | null>(null)
+
+// Syntax highlighter function
+const highlightJson = (json: string): string => {
+  if (!json) return ''
+
+  try {
+    // Parse and re-stringify to ensure valid JSON
+    const obj = JSON.parse(json)
+    json = JSON.stringify(obj, null, 2)
+  } catch {
+    return json // Return as-is if invalid JSON
+  }
+
+  // Convert tabs to spaces for consistent rendering
+  json = json.replace(/\t/g, '  ')
+
+  // Handle empty object/array case
+  if (json.trim() === '') return ''
+
+  // Highlight JSON syntax with improved regex
+  return json
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"(\\.|[^"])*"(\s*:)?/g, (match, p1, p2) => {
+      let cls = 'string'
+      if (p2) {
+        cls = 'key'
+        // Remove the trailing colon from the match for proper highlighting
+        const key = match.replace(/:$/, '')
+        return `<span class="${cls}">${key}</span>:`
+      }
+      return `<span class="${cls}">${match}</span>`
+    })
+    .replace(/\b(true|false)\b/g, '<span class="boolean">$&</span>')
+    .replace(/\b(null)\b/g, '<span class="null">$&</span>')
+    .replace(/\b(\d+\.?\d*)\b/g, '<span class="number">$&</span>')
+    .replace(/\n/g, '<br>') // Handle newlines for better line number alignment
+}
+
+// Update line numbers when input changes
+const updateLineNumbers = () => {
+  const lines = jsonInput.value.split('\n').length
+  lineNumbers.value = Array.from({ length: Math.max(1, lines) }, (_, i) => i + 1).join('\n')
+}
+
+// Sync scroll between textarea and line numbers
+const syncScroll = () => {
+  if (textareaRef.value && lineNumbersRef.value) {
+    lineNumbersRef.value.scrollTop = textareaRef.value.scrollTop
+  }
+}
+
+// Initialize and watch for changes
+onMounted(() => {
+  updateLineNumbers()
+  if (textareaRef.value) {
+    textareaRef.value.addEventListener('input', updateLineNumbers)
+    textareaRef.value.addEventListener('scroll', syncScroll)
+  }
+})
 
 const parsedJson = computed(() => {
   try {
-    return JSON.parse(jsonInput.value)
-  } catch (err) {
-    return { error: 'Invalid JSON' }
+    return jsonInput.value ? JSON.parse(jsonInput.value) : null
+  } catch (_err) {
+    return null
   }
 })
 
@@ -42,14 +105,6 @@ const copyToClipboard = async () => {
     console.error('Failed to copy:', error)
   }
 }
-
-const expandAll = () => {
-  isCollapsed.value = false
-}
-
-const collapseAll = () => {
-  isCollapsed.value = true
-}
 </script>
 
 <template>
@@ -64,13 +119,23 @@ const collapseAll = () => {
         <div class="panel-header">
           <h3>JSON Input</h3>
         </div>
-        <div class="panel-content">
+        <div class="panel-content code-editor">
+          <div class="line-numbers" ref="lineNumbersRef">{{ lineNumbers }}</div>
           <textarea
+            ref="textareaRef"
             v-model="jsonInput"
             class="json-textarea"
             spellcheck="false"
             placeholder="Paste your JSON here..."
+            @input="updateLineNumbers"
+            @scroll="syncScroll"
           ></textarea>
+          <pre
+            class="syntax-highlight"
+            aria-hidden="true"
+            v-html="highlightJson(jsonInput)"
+            ref="highlightRef"
+          ></pre>
         </div>
       </div>
 
@@ -92,20 +157,6 @@ const collapseAll = () => {
               <span class="text">Copy</span>
             </button>
           </div>
-
-          <div class="divider"></div>
-
-          <div class="action-group">
-            <h4>View Options</h4>
-            <button @click="expandAll" class="action-btn" title="Expand All">
-              <span class="icon">+</span>
-              <span class="text">Expand All</span>
-            </button>
-            <button @click="collapseAll" class="action-btn" title="Collapse All">
-              <span class="icon">-</span>
-              <span class="text">Collapse All</span>
-            </button>
-          </div>
         </div>
       </div>
 
@@ -115,20 +166,32 @@ const collapseAll = () => {
           <h3>Tree View</h3>
         </div>
         <div class="panel-content tree-view">
-          <VueJsonPretty
-            ref="jsonViewer"
-            :data="parsedJson"
-            :deep="10"
-            :showLine="true"
-            :showLineNumber="true"
-            :showDoubleQuotes="true"
-            :showLength="true"
-            :highlightMouseoverNode="true"
-            :collapsedOnClickBrackets="true"
-            :deepCollapseChildren="false"
-            :collapsed="isCollapsed"
-            :collapse-strings-after-length="100"
-          />
+          <div v-if="parsedJson" class="tree-view">
+            <VueJsonPretty
+              ref="jsonViewer"
+              :data="parsedJson"
+              :deep="10"
+              :show-line="true"
+              :show-double-quotes="true"
+              :show-length="true"
+              :highlight-selected-node="true"
+              :show-line-number="true"
+              :show-icon="true"
+              :show-line-hover="true"
+              :selectable-type="'multiple'"
+              :show-length-icon="true"
+              :show-double-quotes-icon="true"
+              :show-line-number-icon="true"
+              :show-line-hover-icon="true"
+              :show-icon-icon="true"
+              :highlight-mouseover-node="true"
+              :collapsed-on-click-brackets="true"
+              class="json-tree"
+            />
+          </div>
+          <div v-else class="empty-state">
+            <p>No JSON data to display</p>
+          </div>
         </div>
       </div>
     </div>
@@ -350,26 +413,104 @@ h1 {
 
 .panel-content {
   flex: 1;
-  /* overflow: auto; */
-  /* padding: 1rem; */
   position: relative;
+  overflow: hidden;
+}
+
+.code-editor {
+  position: relative;
+  display: flex;
+  height: 100%;
+  background: #f8f8f8;
+}
+
+.line-numbers {
+  width: 44px;
+  padding: 10px 8px 10px 12px;
+  font-family: 'Fira Code', 'Courier New', monospace;
+  font-size: 0.8125rem;
+  line-height: 1.6;
+  color: #4b5563;
+  text-align: right;
+  background: #f8f9fa;
+  border-right: 1px solid #e5e7eb;
+  user-select: none;
+  overflow: hidden;
+  box-sizing: border-box;
+  font-weight: 500;
 }
 
 .json-textarea {
-  width: 100%;
+  position: absolute;
+  top: 0;
+  left: 44px;
+  width: calc(100% - 44px);
   height: 100%;
   min-height: 200px;
-  /* padding: 1rem; */
-  /* border: 1px solid var(--border); */
-  /* border-radius: 6px; */
+  padding: 10px 12px 10px 8px;
+  margin: 0;
+  font-family: 'Fira Code', 'Courier New', monospace;
+  font-size: 0.875rem;
+  color: #1f2937;
+  line-height: 1.6;
+  resize: none;
+  background: transparent;
+  color: transparent;
+  caret-color: #a29e9e;
+  border: none;
+  outline: none;
+  white-space: pre;
+  overflow: auto;
+  z-index: 2;
+  tab-size: 2;
+  box-sizing: border-box;
+}
+
+.syntax-highlight {
+  position: absolute;
+  top: 0;
+  left: 44px;
+  width: calc(100% - 44px);
+  height: 100%;
+  padding: 10px 12px 10px 8px;
+  margin: 0;
   font-family: 'Fira Code', 'Courier New', monospace;
   font-size: 0.875rem;
   line-height: 1.6;
-  resize: none;
-  background-color: #ffffff;
-  color: var(--text);
-  transition: all 0.2s;
-  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.05);
+  white-space: pre;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 1;
+  box-sizing: border-box;
+  word-wrap: break-word;
+  white-space: pre-wrap;
+  color: #1f2937;
+}
+
+/* Syntax highlighting colors - improved contrast */
+.syntax-highlight {
+  color: #1f2937; /* Darker default text for better readability */
+}
+
+.syntax-highlight .string {
+  color: #d97706; /* Warm orange for strings */
+}
+
+.syntax-highlight .number {
+  color: #059669; /* Green for numbers */
+}
+
+.syntax-highlight .boolean {
+  color: #2563eb; /* Blue for booleans */
+}
+
+.syntax-highlight .null {
+  color: #7c3aed; /* Purple for null */
+}
+
+.syntax-highlight .key {
+  color: #1d4ed8; /* Darker blue for keys */
+  font-weight: 500;
 }
 
 .json-textarea:focus {
@@ -385,6 +526,19 @@ h1 {
   height: 100%;
   overflow: auto;
   padding: 0.5rem 0;
+}
+
+.empty-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: #9e9e9e;
+  font-style: italic;
+}
+
+.json-tree {
+  padding: 0 0.5rem;
 }
 
 /* Custom styles for vue-json-pretty */
